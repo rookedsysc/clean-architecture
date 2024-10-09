@@ -11,64 +11,74 @@ import io.reflectoring.buckpal.application.domain.model.Account.AccountId;
 import lombok.RequiredArgsConstructor;
 
 import jakarta.transaction.Transactional;
+import lombok.extern.slf4j.Slf4j;
+
 import java.time.LocalDateTime;
 
+
+@Slf4j
 @RequiredArgsConstructor
 @UseCase
 @Transactional
 public class SendMoneyService implements SendMoneyUseCase {
 
-	private final LoadAccountPort loadAccountPort;
-	private final AccountLock accountLock;
-	private final UpdateAccountStatePort updateAccountStatePort;
-	private final MoneyTransferProperties moneyTransferProperties;
+    private final LoadAccountPort loadAccountPort;
+    private final AccountLock accountLock;
+    private final UpdateAccountStatePort updateAccountStatePort;
+    private final MoneyTransferProperties moneyTransferProperties;
 
-	@Override
-	public boolean sendMoney(SendMoneyCommand command) {
+    @Override
+    public boolean sendMoney(SendMoneyCommand command) {
+        if (loadAccountPort.equals(updateAccountStatePort)) {
+            // POST http://localhost:8080/accounts/send/41/42/500 로 요청을 보내면 같은 객체로 나옴
+            // Test 할 경우 Mock Proxy 객체기 때문에 다른 객체로 나옴
+            log.info("Equals");
+        }
 
-		checkThreshold(command);
 
-		LocalDateTime baselineDate = LocalDateTime.now().minusDays(10);
+        checkThreshold(command);
 
-		Account sourceAccount = loadAccountPort.loadAccount(
-				command.sourceAccountId(),
-				baselineDate);
+        LocalDateTime baselineDate = LocalDateTime.now().minusDays(10);
 
-		Account targetAccount = loadAccountPort.loadAccount(
-				command.targetAccountId(),
-				baselineDate);
+        Account sourceAccount = loadAccountPort.loadAccount(
+            command.sourceAccountId(),
+            baselineDate);
 
-		AccountId sourceAccountId = sourceAccount.getId()
-				.orElseThrow(() -> new IllegalStateException("expected source account ID not to be empty"));
-		AccountId targetAccountId = targetAccount.getId()
-				.orElseThrow(() -> new IllegalStateException("expected target account ID not to be empty"));
+        Account targetAccount = loadAccountPort.loadAccount(
+            command.targetAccountId(),
+            baselineDate);
 
-		accountLock.lockAccount(sourceAccountId);
-		if (!sourceAccount.withdraw(command.money(), targetAccountId)) {
-			accountLock.releaseAccount(sourceAccountId);
-			return false;
-		}
+        AccountId sourceAccountId = sourceAccount.getId()
+            .orElseThrow(() -> new IllegalStateException("expected source account ID not to be empty"));
+        AccountId targetAccountId = targetAccount.getId()
+            .orElseThrow(() -> new IllegalStateException("expected target account ID not to be empty"));
 
-		accountLock.lockAccount(targetAccountId);
-		if (!targetAccount.deposit(command.money(), sourceAccountId)) {
-			accountLock.releaseAccount(sourceAccountId);
-			accountLock.releaseAccount(targetAccountId);
-			return false;
-		}
+        accountLock.lockAccount(sourceAccountId);
+        if (!sourceAccount.withdraw(command.money(), targetAccountId)) {
+            accountLock.releaseAccount(sourceAccountId);
+            return false;
+        }
 
-		updateAccountStatePort.updateActivities(sourceAccount);
-		updateAccountStatePort.updateActivities(targetAccount);
+        accountLock.lockAccount(targetAccountId);
+        if (!targetAccount.deposit(command.money(), sourceAccountId)) {
+            accountLock.releaseAccount(sourceAccountId);
+            accountLock.releaseAccount(targetAccountId);
+            return false;
+        }
 
-		accountLock.releaseAccount(sourceAccountId);
-		accountLock.releaseAccount(targetAccountId);
-		return true;
-	}
+        updateAccountStatePort.updateActivities(sourceAccount);
+        updateAccountStatePort.updateActivities(targetAccount);
 
-	private void checkThreshold(SendMoneyCommand command) {
-		if(command.money().isGreaterThan(moneyTransferProperties.getMaximumTransferThreshold())){
-			throw new ThresholdExceededException(moneyTransferProperties.getMaximumTransferThreshold(), command.money());
-		}
-	}
+        accountLock.releaseAccount(sourceAccountId);
+        accountLock.releaseAccount(targetAccountId);
+        return true;
+    }
+
+    private void checkThreshold(SendMoneyCommand command) {
+        if (command.money().isGreaterThan(moneyTransferProperties.getMaximumTransferThreshold())) {
+            throw new ThresholdExceededException(moneyTransferProperties.getMaximumTransferThreshold(), command.money());
+        }
+    }
 
 }
 
